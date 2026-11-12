@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://tcqyntzbeinlygvwahav.supabase.co; base-uri 'none'; form-action 'none'">
+  <title>云端连接检测</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #40354b; background: #fcf6fb; font: 16px/1.6 system-ui, sans-serif; }
+    main { max-width: 620px; margin: 0 auto; padding: 28px 20px; }
+    h1 { font-size: 24px; margin: 0 0 12px; }
+    p { margin: 12px 0; }
+    select, button, textarea { font: inherit; border-radius: 6px; border: 1px solid #cfc0db; padding: 10px; }
+    select { width: 100%; background: white; color: inherit; margin: 8px 0 14px; }
+    .confirm { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0 18px; }
+    input { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 3px; accent-color: #8554b0; }
+    button { width: 100%; background: #8554b0; color: white; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: default; }
+    ol { list-style: none; padding: 0; margin: 18px 0; }
+    li { padding: 14px 0; border-bottom: 1px solid #e5dce8; }
+    li strong, li span { display: block; }
+    li span { color: #655b70; overflow-wrap: anywhere; }
+    textarea { display: block; width: 100%; height: 240px; resize: vertical; color: #40354b; background: #fffafd; }
+    [hidden] { display: none; }
+    .note { font-size: 14px; color: #6a5e73; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>云端连接检测</h1>
+    <p>无需登录，不读取档案，也不提交问题。请关闭 VPN 和网络代理后检测。</p>
+    <label for="network">当前网络</label>
+    <select id="network"><option value="">请选择</option><option>Wi-Fi</option><option>手机流量</option></select>
+    <label class="confirm"><input id="direct" type="checkbox"><span>我已关闭 VPN 和代理</span></label>
+    <button id="start" disabled>开始检测</button>
+    <ol aria-live="polite">
+      <li><strong>登录服务</strong><span id="auth">未检测</span></li>
+      <li><strong>数据库接口</strong><span id="database">未检测</span></li>
+      <li><strong>云函数与跨域连接</strong><span id="functions">未检测</span></li>
+    </ol>
+    <p id="summary" role="status">请选择网络并确认代理已关闭。</p>
+    <div id="result" hidden><label for="report">检测结果（可截图或复制发回）</label><textarea id="report" readonly></textarea></div>
+    <p class="note">401 / 403 表示服务器已响应并拒绝匿名访问，不代表登录失败。全部可达也只代表本次网络连通，不等于已完成登录、权限或聊天验收。网页无法自动核实 VPN 是否关闭。</p>
+  </main>
+  <script>
+    "use strict";
+    const base = "https://tcqyntzbeinlygvwahav.supabase.co";
+    const probes = [
+      { id: "auth", label: "登录服务", path: "/auth/v1/health" },
+      { id: "database", label: "数据库接口", path: "/rest/v1/" },
+      { id: "functions", label: "云函数与跨域连接", path: "/functions/v1/chart-calculate", headers: { "Content-Type": "application/json" } },
+    ];
+    const el = (id) => document.getElementById(id);
+    let running = false;
+    function updateButton() { el("start").disabled = running || !el("network").value || !el("direct").checked; }
+    el("network").addEventListener("change", updateButton);
+    el("direct").addEventListener("change", updateButton);
+    async function check(probe) {
+      const started = performance.now();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      el(probe.id).textContent = "检测中…";
+      try {
+        const response = await fetch(base + probe.path, {
+          method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error",
+          referrerPolicy: "no-referrer", signal: controller.signal,
+          ...(probe.headers ? { headers: probe.headers } : {}),
+        });
+        const ms = Math.round(performance.now() - started);
+        const usable = response.ok || response.status === 401 || response.status === 403;
+        const state = usable ? "可达" : "已连接，但服务响应异常";
+        el(probe.id).textContent = `${state} · HTTP ${response.status} · ${ms} 毫秒`;
+        if (response.body) await response.body.cancel();
+        return { label: probe.label, usable, text: el(probe.id).textContent };
+      } catch (error) {
+        el(probe.id).textContent = error.name === "AbortError" ? "连接超时（12 秒）" : "连接失败（网络、TLS 或跨域限制，无法仅凭此结果区分）";
+        return { label: probe.label, usable: false, text: el(probe.id).textContent };
+      } finally { clearTimeout(timer); }
+    }
+    el("start").addEventListener("click", async () => {
+      if (running || !el("network").value || !el("direct").checked) return;
+      running = true;
+      updateButton();
+      el("network").disabled = true;
+      el("direct").disabled = true;
+      const network = el("network").value;
+      el("result").hidden = true;
+      el("summary").textContent = "正在直连 Supabase，不经过 Cloudflare、Netlify 或 Render…";
+      try {
+        const results = [];
+        for (const probe of probes) results.push(await check(probe));
+        const all = results.every((item) => item.usable);
+        el("summary").textContent = all
+          ? "本次三个端点均可达，可以继续评估直连方案；尚未验证真实登录和业务权限。"
+          : "本次未全部通过，暂不切换工作台。请把检测结果发回。";
+        el("report").value = ["云端直连检测 v1", new Date().toISOString(),
+          `网络：${network}`, "VPN / 代理：使用者确认已关闭（网页无法核实）",
+          "网页：GitHub Pages（仅线上测试时适用）", ...results.map((item) => `${item.label}：${item.text}`),
+          el("summary").textContent].join("\n");
+        el("result").hidden = false;
+      } finally {
+        running = false;
+        el("network").disabled = false;
+        el("direct").disabled = false;
+        updateButton();
+      }
+    });
+  </script>
+</body>
+</html>
