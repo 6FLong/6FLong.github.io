@@ -42,7 +42,7 @@
     </ol>
     <p id="summary" role="status">请选择网络并确认代理已关闭。</p>
     <div id="result" hidden><label for="report">检测结果（可截图或复制发回）</label><textarea id="report" readonly></textarea></div>
-    <p class="note">401 / 403 表示服务器已响应并拒绝匿名访问，不代表登录失败。全部可达也只代表本次网络连通，不等于已完成登录、权限或聊天验收。网页无法自动核实 VPN 是否关闭。</p>
+    <p class="note">401 / 403 表示服务器已响应并拒绝此次请求，不代表实际登录失败。全部可达也只代表本次网络连通，不等于已完成登录、权限或聊天验收。网页无法自动核实 VPN 是否关闭。</p>
   </main>
   <script>
     "use strict";
@@ -50,7 +50,7 @@
     const probes = [
       { id: "auth", label: "登录服务", path: "/auth/v1/health" },
       { id: "database", label: "数据库接口", path: "/rest/v1/" },
-      { id: "functions", label: "云函数与跨域连接", path: "/functions/v1/chart-calculate", headers: { "Content-Type": "application/json" } },
+      { id: "functions", label: "云函数与跨域连接", path: "/functions/v1/chart-calculate", method: "POST", headers: { "Content-Type": "application/json" } },
     ];
     const el = (id) => document.getElementById(id);
     let running = false;
@@ -64,7 +64,7 @@
       el(probe.id).textContent = "检测中…";
       try {
         const response = await fetch(base + probe.path, {
-          method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error",
+          method: probe.method || "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error",
           referrerPolicy: "no-referrer", signal: controller.signal,
           ...(probe.headers ? { headers: probe.headers } : {}),
         });
